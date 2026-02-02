@@ -1,0 +1,335 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: embedding-drift-monitor
+  namespace: monitoring
+  labels:
+    app: embedding-drift-monitor
+    version: v1.0.0
+    component: ml-monitoring
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: embedding-drift-monitor
+  template:
+    metadata:
+      labels:
+        app: embedding-drift-monitor
+        version: v1.0.0
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: embedding-drift-monitor
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+      containers:
+      - name: api
+        image: gcr.io/ml-monitoring/embedding-drift-monitor:v1.0.0
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+          protocol: TCP
+          name: http
+        - containerPort: 8080
+          protocol: TCP
+          name: health
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: postgres-credentials
+              key: url
+        - name: REDIS_URL
+          valueFrom:
+            secretKeyRef:
+              name: redis-credentials
+              key: url
+        - name: LOG_LEVEL
+          value: "INFO"
+        - name: PROMETHEUS_ENABLED
+          value: "true"
+        - name: DRIFT_CHECK_INTERVAL
+          value: "300"
+        - name: BATCH_SIZE
+          value: "1000"
+        - name: MAX_WORKERS
+          value: "4"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 15
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 2
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 12
+        volumeMounts:
+        - name: config
+          mountPath: /app/config
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      - name: config
+        configMap:
+          name: embedding-drift-monitor-config
+      - name: tmp
+        emptyDir: {}
+      nodeSelector:
+        node-type: compute
+      tolerations:
+      - key: "compute-only"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - embedding-drift-monitor
+              topologyKey: kubernetes.io/hostname
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: embedding-drift-monitor-service
+  namespace: monitoring
+  labels:
+    app: embedding-drift-monitor
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+    targetPort: 8000
+    protocol: TCP
+    name: http
+  - port: 8080
+    targetPort: 8080
+    protocol: TCP
+    name: health
+  selector:
+    app: embedding-drift-monitor
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: embedding-drift-monitor
+  namespace: monitoring
+  labels:
+    app: embedding-drift-monitor
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: embedding-drift-monitor
+rules:
+- apiGroups: [""]
+  resources: ["pods", "services", "endpoints"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["metrics.k8s.io"]
+  resources: ["pods", "nodes"]
+  verbs: ["get", "list"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: embedding-drift-monitor
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: embedding-drift-monitor
+subjects:
+- kind: ServiceAccount
+  name: embedding-drift-monitor
+  namespace: monitoring
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: embedding-drift-monitor-config
+  namespace: monitoring
+  labels:
+    app: embedding-drift-monitor
+data:
+  drift_thresholds.yaml: |
+    cosine_similarity:
+      warning: 0.85
+      critical: 0.75
+    euclidean_distance:
+      warning: 2.0
+      critical: 3.0
+    kl_divergence:
+      warning: 0.1
+      critical: 0.2
+    wasserstein_distance:
+      warning: 0.5
+      critical: 1.0
+    population_stability_index:
+      warning: 0.1
+      critical: 0.25
+  model_config.yaml: |
+    models:
+      - name: "sentence-transformer"
+        dimension: 384
+        drift_methods: ["cosine", "euclidean", "kl_divergence"]
+        alert_channel: "#ml-alerts"
+      - name: "bert-embeddings"
+        dimension: 768
+        drift_methods: ["cosine", "wasserstein", "psi"]
+        alert_channel: "#ml-alerts"
+    baseline_window_hours: 24
+    comparison_window_hours: 1
+    min_samples_for_analysis: 100
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: embedding-drift-monitor-hpa
+  namespace: monitoring
+  labels:
+    app: embedding-drift-monitor
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: embedding-drift-monitor
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+      - type: Percent
+        value: 50
+        periodSeconds: 30
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 10
+        periodSeconds: 60
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: embedding-drift-monitor-pdb
+  namespace: monitoring
+  labels:
+    app: embedding-drift-monitor
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: embedding-drift-monitor
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: embedding-drift-monitor-netpol
+  namespace: monitoring
+  labels:
+    app: embedding-drift-monitor
+spec:
+  podSelector:
+    matchLabels:
+      app: embedding-drift-monitor
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    - namespaceSelector:
+        matchLabels:
+          name: ml-platform
+    ports:
+    - protocol: TCP
+      port: 8000
+    - protocol: TCP
+      port: 8080
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: databases
+    ports:
+    - protocol: TCP
+      port: 5432
+    - protocol: TCP
+      port: 6379
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 53
+    - protocol: UDP
+      port: 53
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443
+    - protocol: TCP
+      port: 80
