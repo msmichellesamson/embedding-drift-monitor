@@ -4,74 +4,115 @@ Production ML monitoring system that detects embedding drift and model degradati
 
 ## Features
 
-- **Real-time Drift Detection**: Statistical analysis of embedding distributions
-- **Multiple Algorithms**: KS test, Jensen-Shannon divergence, Wasserstein distance
-- **Scalable Storage**: Redis-backed embedding store with TTL management
-- **Production Metrics**: Prometheus metrics for monitoring and alerting
-- **Slack Integration**: Real-time notifications for critical drift events
-- **Cloud Native**: Kubernetes deployment with Terraform infrastructure
+- **Real-time Drift Detection**: Statistical tests and time-series analysis
+- **Production Ready**: Connection pooling, retry logic, comprehensive error handling
+- **Multi-Model Support**: Track embeddings across different models
+- **Alerting**: Slack notifications with configurable thresholds
+- **Observability**: Prometheus metrics and Grafana dashboards
+- **Cloud Native**: Kubernetes deployment with Terraform IaC
 
 ## Architecture
 
 ```
 ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│   ML Models     │───▶│ Drift Detector   │───▶│ Alert Manager   │
-│                 │    │                  │    │                 │
+│  ML Models      │───▶│ Embedding Store  │───▶│ Drift Detector  │
+│ (via REST API)  │    │ (PostgreSQL)     │    │ (Statistical)   │
 └─────────────────┘    └──────────────────┘    └─────────────────┘
-                                │                        │
-                                ▼                        ▼
+                                │                         │
+                                ▼                         ▼
                        ┌──────────────────┐    ┌─────────────────┐
-                       │ Embedding Store  │    │ Slack Notifier  │
-                       │ (Redis)          │    │                 │
+                       │   Prometheus     │    │ Slack Alerts    │
+                       │   Metrics        │    │ & Notifications │
                        └──────────────────┘    └─────────────────┘
 ```
 
 ## Quick Start
 
+### Local Development
+
 ```bash
 # Install dependencies
 pip install -r requirements.txt
 
-# Set environment variables
-export REDIS_URL="redis://localhost:6379"
-export SLACK_WEBHOOK_URL="https://hooks.slack.com/..."
+# Start PostgreSQL
+docker run -p 5432:5432 -e POSTGRES_PASSWORD=password postgres:15
 
-# Run the monitor
+# Run migrations
+python -m src.migrations.init_db
+
+# Start monitoring
 python -m src.main
 ```
 
-## Configuration
-
-```python
-from src.alerts.slack_notifier import SlackNotifier, DriftAlert
-
-# Configure Slack alerts
-async with SlackNotifier(webhook_url=webhook_url) as notifier:
-    alert = DriftAlert(
-        model_name="recommendation-model",
-        drift_score=0.85,
-        threshold=0.7,
-        timestamp="1234567890",
-        severity="critical"
-    )
-    await notifier.send_drift_alert(alert)
-```
-
-## Deployment
+### Production Deployment
 
 ```bash
 # Deploy infrastructure
-cd terraform && terraform apply
+cd terraform && terraform init && terraform apply
 
 # Deploy to Kubernetes
 kubectl apply -f k8s/
 ```
 
+## Configuration
+
+```yaml
+# config.yaml
+database:
+  connection_string: "postgresql://user:pass@localhost:5432/embeddings"
+  pool_size: 20
+
+monitoring:
+  check_interval: 300
+  drift_threshold: 0.15
+  
+alerting:
+  slack_webhook: "https://hooks.slack.com/..."
+  alert_threshold: 0.20
+```
+
+## API Usage
+
+```python
+# Store embeddings
+POST /embeddings
+{
+  "model_name": "sentence-transformer",
+  "embedding": [0.1, 0.2, ...],
+  "metadata": {"text": "sample text", "timestamp": 1703980800}
+}
+
+# Get drift metrics
+GET /drift/{model_name}
+```
+
+## Monitoring Stack
+
+- **PostgreSQL**: Embedding storage with vector similarity search
+- **Prometheus**: Metrics collection and alerting rules
+- **Grafana**: Visualization dashboards
+- **Kubernetes**: Container orchestration
+- **Terraform**: Infrastructure as Code
+
+## Drift Detection Methods
+
+1. **Statistical Tests**: KS test, Wasserstein distance
+2. **Similarity Tracking**: Cosine similarity trends over time
+3. **Time Series Analysis**: Seasonal decomposition and anomaly detection
+
 ## Skills Demonstrated
 
-- **ML/AI**: Embedding analysis, drift detection algorithms, model monitoring
-- **Backend**: Async Python, Redis integration, gRPC APIs
-- **Infrastructure**: Terraform (GCP), Kubernetes, Docker
-- **SRE**: Prometheus metrics, alerting, observability
-- **DevOps**: CI/CD pipelines, containerization
-- **Data Engineering**: Real-time data processing, statistical analysis
+- **ML/AI**: Embedding analysis, drift detection, model monitoring
+- **Infrastructure**: Terraform, Kubernetes, cloud deployment
+- **Backend**: REST APIs, database design, microservices
+- **Database**: PostgreSQL, connection pooling, query optimization
+- **DevOps**: Docker, CI/CD, monitoring and alerting
+- **SRE**: Production reliability, error handling, observability
+
+## Recent Updates
+
+- ✅ Added connection pooling and retry logic for database reliability
+- ✅ Implemented comprehensive error handling and logging
+- ✅ Added Prometheus metrics for observability
+- ✅ Kubernetes deployment configuration
+- ✅ Terraform infrastructure setup
