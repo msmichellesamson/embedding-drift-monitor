@@ -1,80 +1,91 @@
-import logging
-import time
-from typing import List, Optional, Dict, Any
-from contextlib import contextmanager
-import psycopg2
-from psycopg2 import pool
-from psycopg2.extras import RealDictCursor
+"""Embedding storage with circuit breaker protection."""
+import asyncpg
 import numpy as np
-from tenacity import retry, stop_after_attempt, wait_exponential
+from typing import List, Optional, Dict, Any
+import logging
+from .circuit_breaker import CircuitBreaker, CircuitBreakerConfig
 
 logger = logging.getLogger(__name__)
 
 class EmbeddingStore:
-    def __init__(self, connection_string: str, min_conn: int = 5, max_conn: int = 20):
+    """PostgreSQL-backed embedding storage with reliability patterns."""
+    
+    def __init__(self, connection_string: str):
         self.connection_string = connection_string
-        try:
-            self.pool = psycopg2.pool.ThreadedConnectionPool(
-                min_conn, max_conn, connection_string, cursor_factory=RealDictCursor
+        self.pool: Optional[asyncpg.Pool] = None
+        
+        # Circuit breaker for database operations
+        self.circuit_breaker = CircuitBreaker(
+            CircuitBreakerConfig(
+                failure_threshold=3,
+                recovery_timeout=30,
+                expected_exception=asyncpg.PostgreSQLError
             )
-            logger.info(f"Initialized connection pool with {min_conn}-{max_conn} connections")
-        except psycopg2.Error as e:
-            logger.error(f"Failed to create connection pool: {e}")
-            raise
+        )
     
-    @contextmanager
-    def get_connection(self):
-        conn = None
+    async def initialize(self):
+        """Initialize connection pool and create tables."""
         try:
-            conn = self.pool.getconn()
-            if conn.closed:
-                logger.warning("Got closed connection from pool, creating new one")
-                conn = psycopg2.connect(self.connection_string, cursor_factory=RealDictCursor)
-            yield conn
-        except psycopg2.Error as e:
-            if conn:
-                conn.rollback()
-            logger.error(f"Database connection error: {e}")
+            self.pool = await self.circuit_breaker.call(
+                asyncpg.create_pool,
+                self.connection_string,
+                min_size=2,
+                max_size=10
+            )
+            await self._create_tables()
+            logger.info("EmbeddingStore initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize EmbeddingStore: {e}")
             raise
-        finally:
-            if conn and not conn.closed:
-                self.pool.putconn(conn)
     
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-    def store_embedding(self, model_name: str, embedding: np.ndarray, metadata: Dict[str, Any]) -> str:
-        with self.get_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(
+    async def store_embedding(self, model_name: str, embedding: np.ndarray, metadata: Dict[str, Any]):
+        """Store embedding with circuit breaker protection."""
+        async def _store():
+            async with self.pool.acquire() as conn:
+                await conn.execute(
                     """
-                    INSERT INTO embeddings (model_name, embedding_vector, metadata, created_at)
-                    VALUES (%s, %s, %s, NOW())
-                    RETURNING id
+                    INSERT INTO embeddings (model_name, embedding, metadata, created_at)
+                    VALUES ($1, $2, $3, NOW())
                     """,
-                    (model_name, embedding.tolist(), metadata)
+                    model_name, embedding.tobytes(), metadata
                 )
-                embedding_id = cursor.fetchone()['id']
-                conn.commit()
-                logger.debug(f"Stored embedding {embedding_id} for model {model_name}")
-                return embedding_id
+        
+        return await self.circuit_breaker.call(_store)
     
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-    def get_recent_embeddings(self, model_name: str, hours: int = 24) -> List[Dict[str, Any]]:
-        with self.get_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(
+    async def get_recent_embeddings(self, model_name: str, limit: int = 100) -> List[Dict[str, Any]]:
+        """Retrieve recent embeddings with error handling."""
+        async def _get():
+            async with self.pool.acquire() as conn:
+                rows = await conn.fetch(
                     """
-                    SELECT id, embedding_vector, metadata, created_at
-                    FROM embeddings
-                    WHERE model_name = %s AND created_at >= NOW() - INTERVAL '%s hours'
-                    ORDER BY created_at DESC
+                    SELECT embedding, metadata, created_at 
+                    FROM embeddings 
+                    WHERE model_name = $1 
+                    ORDER BY created_at DESC 
+                    LIMIT $2
                     """,
-                    (model_name, hours)
+                    model_name, limit
                 )
-                embeddings = cursor.fetchall()
-                logger.debug(f"Retrieved {len(embeddings)} embeddings for {model_name}")
-                return embeddings
+                return [{
+                    'embedding': np.frombuffer(row['embedding'], dtype=np.float32),
+                    'metadata': row['metadata'],
+                    'created_at': row['created_at']
+                } for row in rows]
+        
+        return await self.circuit_breaker.call(_get)
     
-    def close(self):
-        if self.pool:
-            self.pool.closeall()
-            logger.info("Closed all database connections")
+    async def _create_tables(self):
+        """Create required database tables."""
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS embeddings (
+                    id SERIAL PRIMARY KEY,
+                    model_name VARCHAR(255) NOT NULL,
+                    embedding BYTEA NOT NULL,
+                    metadata JSONB,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    INDEX(model_name, created_at)
+                )
+                """
+            )
