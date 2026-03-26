@@ -1,0 +1,105 @@
+openapi: 3.0.3
+info:
+  title: Embedding Drift Monitor API
+  version: 1.0.0
+  description: Production ML monitoring system for embedding drift detection
+
+paths:
+  /api/v1/drift/check:
+    post:
+      summary: Check for embedding drift
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                embeddings:
+                  type: array
+                  items:
+                    type: array
+                    items:
+                      type: number
+                model_id:
+                  type: string
+                timestamp:
+                  type: string
+                  format: date-time
+              required: [embeddings, model_id]
+      responses:
+        '200':
+          description: Drift analysis results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  drift_score:
+                    type: number
+                  is_drifting:
+                    type: boolean
+                  confidence:
+                    type: number
+                  alert_triggered:
+                    type: boolean
+
+  /api/v1/health:
+    get:
+      summary: Health check endpoint
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  circuit_breaker_state:
+                    type: string
+                  last_check:
+                    type: string
+                    format: date-time
+
+  /api/v1/metrics:
+    get:
+      summary: Get drift metrics
+      parameters:
+        - name: model_id
+          in: query
+          schema:
+            type: string
+        - name: hours
+          in: query
+          schema:
+            type: integer
+            default: 24
+      responses:
+        '200':
+          description: Drift metrics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  avg_drift_score:
+                    type: number
+                  drift_events:
+                    type: integer
+                  uptime:
+                    type: number
+
+components:
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+        code:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
