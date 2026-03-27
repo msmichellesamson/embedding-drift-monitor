@@ -1,77 +1,61 @@
-"""Retry mechanism for alert delivery with exponential backoff."""
 import asyncio
 import logging
-import random
-from typing import Any, Callable, Optional, Type
-from dataclasses import dataclass
-from enum import Enum
+from typing import Callable, Any, Optional
+from functools import wraps
 
 logger = logging.getLogger(__name__)
 
-class RetryPolicy(Enum):
-    EXPONENTIAL_BACKOFF = "exponential_backoff"
-    FIXED_DELAY = "fixed_delay"
-    LINEAR_BACKOFF = "linear_backoff"
-
-@dataclass
 class RetryConfig:
-    max_attempts: int = 3
-    base_delay: float = 1.0
-    max_delay: float = 60.0
-    policy: RetryPolicy = RetryPolicy.EXPONENTIAL_BACKOFF
-    jitter: bool = True
-    backoff_multiplier: float = 2.0
-    retryable_exceptions: tuple = (Exception,)
+    def __init__(self, max_retries: int = 3, base_delay: float = 1.0, max_delay: float = 60.0):
+        self.max_retries = max_retries
+        self.base_delay = base_delay
+        self.max_delay = max_delay
+
+def with_exponential_backoff(config: Optional[RetryConfig] = None):
+    """Decorator that adds exponential backoff retry logic to async functions."""
+    if config is None:
+        config = RetryConfig()
+    
+    def decorator(func: Callable) -> Callable:
+        @wraps(func)
+        async def wrapper(*args, **kwargs) -> Any:
+            last_exception = None
+            
+            for attempt in range(config.max_retries + 1):
+                try:
+                    return await func(*args, **kwargs)
+                except Exception as e:
+                    last_exception = e
+                    
+                    if attempt == config.max_retries:
+                        logger.error(f"Final retry attempt failed for {func.__name__}: {e}")
+                        raise e
+                    
+                    # Calculate exponential backoff delay
+                    delay = min(
+                        config.base_delay * (2 ** attempt),
+                        config.max_delay
+                    )
+                    
+                    logger.warning(
+                        f"Attempt {attempt + 1}/{config.max_retries + 1} failed for {func.__name__}: {e}. "
+                        f"Retrying in {delay:.2f}s"
+                    )
+                    
+                    await asyncio.sleep(delay)
+            
+            raise last_exception
+        
+        return wrapper
+    return decorator
 
 class RetryHandler:
-    """Handles retry logic for alert delivery operations."""
+    """Handles retry logic with exponential backoff for notification systems."""
     
     def __init__(self, config: Optional[RetryConfig] = None):
         self.config = config or RetryConfig()
-        
-    async def retry_async(
-        self, 
-        func: Callable[..., Any], 
-        *args, 
-        **kwargs
-    ) -> Any:
-        """Execute function with async retry logic."""
-        last_exception = None
-        
-        for attempt in range(1, self.config.max_attempts + 1):
-            try:
-                logger.debug(f"Attempt {attempt}/{self.config.max_attempts} for {func.__name__}")
-                return await func(*args, **kwargs)
-                
-            except self.config.retryable_exceptions as e:
-                last_exception = e
-                logger.warning(
-                    f"Attempt {attempt} failed for {func.__name__}: {str(e)}"
-                )
-                
-                if attempt == self.config.max_attempts:
-                    break
-                    
-                delay = self._calculate_delay(attempt)
-                logger.info(f"Retrying in {delay:.2f}s...")
-                await asyncio.sleep(delay)
-                
-        logger.error(f"All retry attempts exhausted for {func.__name__}")
-        raise last_exception
     
-    def _calculate_delay(self, attempt: int) -> float:
-        """Calculate delay based on retry policy."""
-        if self.config.policy == RetryPolicy.EXPONENTIAL_BACKOFF:
-            delay = self.config.base_delay * (self.config.backoff_multiplier ** (attempt - 1))
-        elif self.config.policy == RetryPolicy.LINEAR_BACKOFF:
-            delay = self.config.base_delay * attempt
-        else:  # FIXED_DELAY
-            delay = self.config.base_delay
-            
-        delay = min(delay, self.config.max_delay)
-        
-        if self.config.jitter:
-            jitter = delay * 0.1 * random.random()
-            delay += jitter
-            
-        return delay
+    async def execute_with_retry(self, func: Callable, *args, **kwargs) -> Any:
+        """Execute function with exponential backoff retry."""
+        decorated_func = with_exponential_backoff(self.config)(func)
+        return await decorated_func(*args, **kwargs)
