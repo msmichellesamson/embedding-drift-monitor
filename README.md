@@ -4,115 +4,101 @@ Production ML monitoring system that detects embedding drift and model degradati
 
 ## Features
 
-- **Real-time Drift Detection**: Statistical tests and time-series analysis
-- **Production Ready**: Connection pooling, retry logic, comprehensive error handling
-- **Multi-Model Support**: Track embeddings across different models
-- **Alerting**: Slack notifications with configurable thresholds
-- **Observability**: Prometheus metrics and Grafana dashboards
-- **Cloud Native**: Kubernetes deployment with Terraform IaC
+- **Real-time Drift Detection**: Statistical tests (KS, MMD, Wasserstein) for embedding distribution changes
+- **Anomaly Detection**: Time-series analysis with seasonal decomposition and outlier detection
+- **Circuit Breaker Pattern**: Fault tolerance for external dependencies
+- **Multi-channel Alerting**: Slack, PagerDuty, and email notifications with exponential backoff retry
+- **Prometheus Integration**: Custom metrics and alerting rules
+- **Production Ready**: Kubernetes deployment, Terraform infrastructure, comprehensive testing
 
 ## Architecture
 
 ```
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│  ML Models      │───▶│ Embedding Store  │───▶│ Drift Detector  │
-│ (via REST API)  │    │ (PostgreSQL)     │    │ (Statistical)   │
-└─────────────────┘    └──────────────────┘    └─────────────────┘
-                                │                         │
-                                ▼                         ▼
-                       ┌──────────────────┐    ┌─────────────────┐
-                       │   Prometheus     │    │ Slack Alerts    │
-                       │   Metrics        │    │ & Notifications │
-                       └──────────────────┘    └─────────────────┘
+┌─────────────────┐    ┌──────────────┐    ┌─────────────┐
+│   Embeddings    │───▶│ Drift        │───▶│  Alerting   │
+│   Ingestion     │    │ Detection    │    │  System     │
+└─────────────────┘    └──────────────┘    └─────────────┘
+         │                      │                   │
+         ▼                      ▼                   ▼
+┌─────────────────┐    ┌──────────────┐    ┌─────────────┐
+│  Embedding      │    │ Statistical  │    │ Retry       │
+│  Store          │    │ Analysis     │    │ Handler     │
+└─────────────────┘    └──────────────┘    └─────────────┘
 ```
 
 ## Quick Start
 
-### Local Development
-
 ```bash
-# Install dependencies
-pip install -r requirements.txt
-
-# Start PostgreSQL
-docker run -p 5432:5432 -e POSTGRES_PASSWORD=password postgres:15
-
-# Run migrations
-python -m src.migrations.init_db
-
-# Start monitoring
-python -m src.main
-```
-
-### Production Deployment
-
-```bash
-# Deploy infrastructure
-cd terraform && terraform init && terraform apply
+# Run with Docker
+docker build -f docker/Dockerfile -t embedding-drift-monitor .
+docker run -p 8080:8080 embedding-drift-monitor
 
 # Deploy to Kubernetes
-kubectl apply -f k8s/
-```
+kubectl apply -f k8s/deployment.yaml
 
-## Configuration
-
-```yaml
-# config.yaml
-database:
-  connection_string: "postgresql://user:pass@localhost:5432/embeddings"
-  pool_size: 20
-
-monitoring:
-  check_interval: 300
-  drift_threshold: 0.15
-  
-alerting:
-  slack_webhook: "https://hooks.slack.com/..."
-  alert_threshold: 0.20
+# Setup infrastructure
+cd terraform && terraform init && terraform apply
 ```
 
 ## API Usage
 
 ```python
-# Store embeddings
-POST /embeddings
-{
-  "model_name": "sentence-transformer",
-  "embedding": [0.1, 0.2, ...],
-  "metadata": {"text": "sample text", "timestamp": 1703980800}
-}
+import httpx
 
-# Get drift metrics
-GET /drift/{model_name}
+# Submit embeddings for monitoring
+response = httpx.post(
+    "http://localhost:8080/embeddings",
+    json={"embeddings": [[0.1, 0.2, 0.3]], "model_id": "bert-base"}
+)
+
+# Check drift status
+drift_status = httpx.get("http://localhost:8080/drift/bert-base")
 ```
 
-## Monitoring Stack
+## Configuration
 
-- **PostgreSQL**: Embedding storage with vector similarity search
-- **Prometheus**: Metrics collection and alerting rules
-- **Grafana**: Visualization dashboards
-- **Kubernetes**: Container orchestration
-- **Terraform**: Infrastructure as Code
+```python
+from src.core.drift_detector import DriftConfig
+from src.alerts.retry_handler import RetryConfig
 
-## Drift Detection Methods
+config = DriftConfig(
+    window_size=1000,
+    drift_threshold=0.05,
+    alert_threshold=3
+)
 
-1. **Statistical Tests**: KS test, Wasserstein distance
-2. **Similarity Tracking**: Cosine similarity trends over time
-3. **Time Series Analysis**: Seasonal decomposition and anomaly detection
+retry_config = RetryConfig(
+    max_retries=3,
+    base_delay=1.0,
+    max_delay=60.0
+)
+```
 
-## Skills Demonstrated
+## Monitoring
 
-- **ML/AI**: Embedding analysis, drift detection, model monitoring
-- **Infrastructure**: Terraform, Kubernetes, cloud deployment
-- **Backend**: REST APIs, database design, microservices
-- **Database**: PostgreSQL, connection pooling, query optimization
-- **DevOps**: Docker, CI/CD, monitoring and alerting
-- **SRE**: Production reliability, error handling, observability
+- **Prometheus metrics**: `http://localhost:8080/metrics`
+- **Health check**: `http://localhost:8080/health`
+- **OpenAPI docs**: `http://localhost:8080/docs`
+
+## Tech Stack
+
+- **Backend**: Python, FastAPI, asyncio
+- **ML**: NumPy, SciPy, scikit-learn
+- **Infrastructure**: Terraform (GCP), Kubernetes, Docker
+- **Monitoring**: Prometheus, custom metrics
+- **Database**: Redis for embedding storage
+- **Alerting**: Slack, PagerDuty, SMTP with exponential backoff
+
+## Testing
+
+```bash
+pytest tests/ -v --cov=src/
+```
 
 ## Recent Updates
 
-- ✅ Added connection pooling and retry logic for database reliability
-- ✅ Implemented comprehensive error handling and logging
-- ✅ Added Prometheus metrics for observability
-- ✅ Kubernetes deployment configuration
-- ✅ Terraform infrastructure setup
+- ✅ Added exponential backoff retry logic for alert notifications
+- ✅ Implemented circuit breaker pattern for external dependencies
+- ✅ Added comprehensive statistical drift detection
+- ✅ Kubernetes deployment with health checks
+- ✅ Prometheus integration with custom metrics
