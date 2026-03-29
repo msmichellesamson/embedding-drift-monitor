@@ -1,104 +1,79 @@
 # Embedding Drift Monitor
 
-Production ML monitoring system that detects embedding drift and model degradation in real-time.
-
-## Features
-
-- **Real-time Drift Detection**: Statistical tests (KS, MMD, Wasserstein) for embedding distribution changes
-- **Anomaly Detection**: Time-series analysis with seasonal decomposition and outlier detection
-- **Circuit Breaker Pattern**: Fault tolerance for external dependencies
-- **Multi-channel Alerting**: Slack, PagerDuty, and email notifications with exponential backoff retry
-- **Prometheus Integration**: Custom metrics and alerting rules
-- **Production Ready**: Kubernetes deployment, Terraform infrastructure, comprehensive testing
+Production ML monitoring system that detects embedding drift and model degradation in real-time using statistical analysis and time-series anomaly detection.
 
 ## Architecture
 
 ```
-┌─────────────────┐    ┌──────────────┐    ┌─────────────┐
-│   Embeddings    │───▶│ Drift        │───▶│  Alerting   │
-│   Ingestion     │    │ Detection    │    │  System     │
-└─────────────────┘    └──────────────┘    └─────────────┘
-         │                      │                   │
-         ▼                      ▼                   ▼
-┌─────────────────┐    ┌──────────────┐    ┌─────────────┐
-│  Embedding      │    │ Statistical  │    │ Retry       │
-│  Store          │    │ Analysis     │    │ Handler     │
-└─────────────────┘    └──────────────┘    └─────────────┘
+┌─────────────────┐    ┌──────────────┐    ┌─────────────────┐
+│   ML Models     │───▶│ Drift Monitor│───▶│   Alerting      │
+│                 │    │              │    │                 │
+│ • Embeddings    │    │ • Statistical│    │ • Slack         │
+│ • Predictions   │    │ • Time Series│    │ • PagerDuty     │
+│ • Features      │    │ • Similarity │    │ • Email         │
+└─────────────────┘    └──────────────┘    └─────────────────┘
+                              │
+                       ┌──────────────┐
+                       │   Storage    │
+                       │              │
+                       │ • PostgreSQL │
+                       │ • Redis      │
+                       └──────────────┘
 ```
+
+## Skills Demonstrated
+
+**AI/ML**: Embedding drift detection, similarity analysis, model degradation monitoring
+**Backend**: FastAPI REST API, async processing, database integration
+**Database**: PostgreSQL for metrics storage, Redis for caching and circuit breaker state
+**SRE**: Prometheus metrics, Grafana dashboards, health checks, circuit breaker pattern
+**Infrastructure**: Terraform for GCP deployment, Kubernetes manifests, Istio service mesh
+**DevOps**: CI/CD pipeline, Docker containerization, automated testing
+**Data**: Real-time stream processing, statistical analysis, time-series anomaly detection
 
 ## Quick Start
 
 ```bash
-# Run with Docker
-docker build -f docker/Dockerfile -t embedding-drift-monitor .
-docker run -p 8080:8080 embedding-drift-monitor
+# Start with Docker Compose
+docker-compose up -d
 
-# Deploy to Kubernetes
-kubectl apply -f k8s/deployment.yaml
+# Submit embeddings
+curl -X POST http://localhost:8000/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{"model_name": "test-model", "embeddings": [[0.1, 0.2, 0.3]]}'
 
-# Setup infrastructure
-cd terraform && terraform init && terraform apply
-```
-
-## API Usage
-
-```python
-import httpx
-
-# Submit embeddings for monitoring
-response = httpx.post(
-    "http://localhost:8080/embeddings",
-    json={"embeddings": [[0.1, 0.2, 0.3]], "model_id": "bert-base"}
-)
-
-# Check drift status
-drift_status = httpx.get("http://localhost:8080/drift/bert-base")
+# Check drift metrics
+curl http://localhost:8000/metrics/test-model
 ```
 
 ## Configuration
 
-```python
-from src.core.drift_detector import DriftConfig
-from src.alerts.retry_handler import RetryConfig
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `DRIFT_THRESHOLD` | Drift alert threshold | `0.5` |
+| `REDIS_URL` | Redis connection string | `redis://localhost:6379` |
+| `DATABASE_URL` | PostgreSQL connection | `postgresql://localhost/drift` |
+| `ALERT_COOLDOWN` | Minutes between alerts | `60` |
 
-config = DriftConfig(
-    window_size=1000,
-    drift_threshold=0.05,
-    alert_threshold=3
-)
+## Deployment
 
-retry_config = RetryConfig(
-    max_retries=3,
-    base_delay=1.0,
-    max_delay=60.0
-)
+```bash
+# Deploy to GCP with Terraform
+cd terraform
+terraform init
+terraform apply
+
+# Deploy to Kubernetes
+kubectl apply -f k8s/
 ```
 
 ## Monitoring
 
-- **Prometheus metrics**: `http://localhost:8080/metrics`
-- **Health check**: `http://localhost:8080/health`
-- **OpenAPI docs**: `http://localhost:8080/docs`
+- **Prometheus**: `/metrics` endpoint for drift scores and system metrics
+- **Grafana**: Import dashboard from `monitoring/grafana-dashboard.json`
+- **Alerts**: Configured via `monitoring/alert_rules.yml`
 
-## Tech Stack
+## Documentation
 
-- **Backend**: Python, FastAPI, asyncio
-- **ML**: NumPy, SciPy, scikit-learn
-- **Infrastructure**: Terraform (GCP), Kubernetes, Docker
-- **Monitoring**: Prometheus, custom metrics
-- **Database**: Redis for embedding storage
-- **Alerting**: Slack, PagerDuty, SMTP with exponential backoff
-
-## Testing
-
-```bash
-pytest tests/ -v --cov=src/
-```
-
-## Recent Updates
-
-- ✅ Added exponential backoff retry logic for alert notifications
-- ✅ Implemented circuit breaker pattern for external dependencies
-- ✅ Added comprehensive statistical drift detection
-- ✅ Kubernetes deployment with health checks
-- ✅ Prometheus integration with custom metrics
+- [API Reference](docs/API.md) - Complete API documentation
+- [Troubleshooting](docs/TROUBLESHOOTING.md) - Common issues and solutions
