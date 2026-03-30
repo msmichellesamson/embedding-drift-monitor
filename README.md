@@ -1,79 +1,86 @@
 # Embedding Drift Monitor
 
-Production ML monitoring system that detects embedding drift and model degradation in real-time using statistical analysis and time-series anomaly detection.
+> Production ML monitoring system that detects embedding drift and model degradation in real-time
 
 ## Architecture
 
 ```
-┌─────────────────┐    ┌──────────────┐    ┌─────────────────┐
-│   ML Models     │───▶│ Drift Monitor│───▶│   Alerting      │
-│                 │    │              │    │                 │
-│ • Embeddings    │    │ • Statistical│    │ • Slack         │
-│ • Predictions   │    │ • Time Series│    │ • PagerDuty     │
-│ • Features      │    │ • Similarity │    │ • Email         │
-└─────────────────┘    └──────────────┘    └─────────────────┘
-                              │
-                       ┌──────────────┐
-                       │   Storage    │
-                       │              │
-                       │ • PostgreSQL │
-                       │ • Redis      │
-                       └──────────────┘
+Embeddings → Drift Detection → Statistical Analysis → Alerts → Monitoring
+     ↓              ↓                   ↓             ↓          ↓
+   Store       Circuit Breaker    Time Series    Slack/PD   Prometheus
 ```
 
-## Skills Demonstrated
+## Features
 
-**AI/ML**: Embedding drift detection, similarity analysis, model degradation monitoring
-**Backend**: FastAPI REST API, async processing, database integration
-**Database**: PostgreSQL for metrics storage, Redis for caching and circuit breaker state
-**SRE**: Prometheus metrics, Grafana dashboards, health checks, circuit breaker pattern
-**Infrastructure**: Terraform for GCP deployment, Kubernetes manifests, Istio service mesh
-**DevOps**: CI/CD pipeline, Docker containerization, automated testing
-**Data**: Real-time stream processing, statistical analysis, time-series anomaly detection
+- **Real-time drift detection** with configurable thresholds
+- **Statistical analysis** (KS test, Wasserstein distance, PCA drift)
+- **Circuit breaker** pattern for system resilience
+- **Multi-channel alerting** (Slack, PagerDuty, Email)
+- **Prometheus metrics** and Grafana dashboards
+- **REST API** for embedding comparison and monitoring
+- **Kubernetes deployment** with Istio service mesh
 
 ## Quick Start
 
 ```bash
-# Start with Docker Compose
-docker-compose up -d
+# Local development
+docker build -f docker/Dockerfile -t embedding-drift-monitor .
+docker run -p 8000:8000 embedding-drift-monitor
 
-# Submit embeddings
-curl -X POST http://localhost:8000/embeddings \
+# Test drift detection
+curl -X POST http://localhost:8000/api/v1/comparison/detect \
   -H "Content-Type: application/json" \
-  -d '{"model_name": "test-model", "embeddings": [[0.1, 0.2, 0.3]]}'
-
-# Check drift metrics
-curl http://localhost:8000/metrics/test-model
+  -d '{
+    "baseline_embeddings": [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]],
+    "current_embeddings": [[0.8, 0.9, 1.0], [1.1, 1.2, 1.3]],
+    "model_name": "test-model",
+    "threshold": 0.1
+  }'
 ```
 
-## Configuration
+## API Endpoints
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `DRIFT_THRESHOLD` | Drift alert threshold | `0.5` |
-| `REDIS_URL` | Redis connection string | `redis://localhost:6379` |
-| `DATABASE_URL` | PostgreSQL connection | `postgresql://localhost/drift` |
-| `ALERT_COOLDOWN` | Minutes between alerts | `60` |
+- `POST /api/v1/comparison/detect` - Compare embeddings for drift
+- `GET /api/v1/comparison/health` - Service health check
+- `GET /metrics` - Prometheus metrics
 
-## Deployment
+## Infrastructure
+
+- **Terraform**: GCP infrastructure provisioning
+- **Kubernetes**: Container orchestration with Istio
+- **Prometheus**: Metrics collection and alerting
+- **Circuit breaker**: Resilience patterns
+
+## Skills Demonstrated
+
+- **ML/AI**: Embedding drift detection, statistical analysis
+- **Backend**: FastAPI, REST APIs, error handling
+- **Infrastructure**: Terraform, Kubernetes, Istio
+- **SRE**: Prometheus, alerting, circuit breakers
+- **DevOps**: Docker, CI/CD, monitoring
+- **Database**: Time series storage, metrics collection
+
+## Development
 
 ```bash
-# Deploy to GCP with Terraform
-cd terraform
-terraform init
-terraform apply
+# Install dependencies
+pip install -r requirements.txt
+
+# Run tests
+pytest tests/ -v
+
+# Apply infrastructure
+cd terraform && terraform apply
 
 # Deploy to Kubernetes
 kubectl apply -f k8s/
 ```
 
-## Monitoring
+## Configuration
 
-- **Prometheus**: `/metrics` endpoint for drift scores and system metrics
-- **Grafana**: Import dashboard from `monitoring/grafana-dashboard.json`
-- **Alerts**: Configured via `monitoring/alert_rules.yml`
-
-## Documentation
-
-- [API Reference](docs/API.md) - Complete API documentation
-- [Troubleshooting](docs/TROUBLESHOOTING.md) - Common issues and solutions
+Environment variables:
+- `DRIFT_THRESHOLD`: Default drift detection threshold (0.1)
+- `PROMETHEUS_PORT`: Metrics server port (9090)
+- `LOG_LEVEL`: Logging level (INFO)
+- `SLACK_WEBHOOK_URL`: Slack notifications
+- `PAGERDUTY_API_KEY`: PagerDuty integration
