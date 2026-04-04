@@ -1,86 +1,157 @@
 # Embedding Drift Monitor
 
-> Production ML monitoring system that detects embedding drift and model degradation in real-time
+Production ML monitoring system that detects embedding drift and model degradation in real-time.
+
+## Features
+
+### Core Monitoring
+- **Drift Detection**: Statistical tests for embedding distribution changes
+- **Similarity Tracking**: Monitor embedding similarity patterns over time
+- **Vector Health**: Track embedding quality metrics and outliers
+- **Dimension Validation**: Ensure embedding dimensions remain consistent across models
+- **Anomaly Detection**: Real-time detection of unusual embedding patterns
+
+### Infrastructure
+- **Redis Cache**: High-performance embedding storage with TTL
+- **PostgreSQL**: Persistent storage for drift metrics and alerts
+- **Circuit Breaker**: Fault tolerance for external dependencies
+- **Prometheus Integration**: Comprehensive metrics collection
+
+### Alerting
+- **Multi-Channel Notifications**: Slack, Discord, PagerDuty, Email, Webhook
+- **Intelligent Retry Logic**: Exponential backoff with circuit breaking
+- **Alert Severity Levels**: Configurable thresholds and escalation
+
+### API & Analysis
+- **REST API**: Compare embeddings and retrieve drift metrics
+- **Time Series Analysis**: Trend detection and forecasting
+- **Statistical Testing**: Kolmogorov-Smirnov, Jensen-Shannon divergence
 
 ## Architecture
 
 ```
-Embeddings → Drift Detection → Statistical Analysis → Alerts → Monitoring
-     ↓              ↓                   ↓             ↓          ↓
-   Store       Circuit Breaker    Time Series    Slack/PD   Prometheus
+┌─────────────────┐    ┌──────────────┐    ┌─────────────────┐
+│   ML Models     │───▶│   API Layer  │───▶│  Drift Engine   │
+└─────────────────┘    └──────────────┘    └─────────────────┘
+                                                     │
+                       ┌─────────────────┐          ▼
+                       │   Alerting      │    ┌─────────────────┐
+                       │   System        │◀───│  Redis Cache    │
+                       └─────────────────┘    └─────────────────┘
+                                                     │
+                                                     ▼
+                                            ┌─────────────────┐
+                                            │   PostgreSQL    │
+                                            │   (Metrics)     │
+                                            └─────────────────┘
 ```
-
-## Features
-
-- **Real-time drift detection** with configurable thresholds
-- **Statistical analysis** (KS test, Wasserstein distance, PCA drift)
-- **Circuit breaker** pattern for system resilience
-- **Multi-channel alerting** (Slack, PagerDuty, Email)
-- **Prometheus metrics** and Grafana dashboards
-- **REST API** for embedding comparison and monitoring
-- **Kubernetes deployment** with Istio service mesh
 
 ## Quick Start
 
-```bash
-# Local development
-docker build -f docker/Dockerfile -t embedding-drift-monitor .
-docker run -p 8000:8000 embedding-drift-monitor
-
-# Test drift detection
-curl -X POST http://localhost:8000/api/v1/comparison/detect \
-  -H "Content-Type: application/json" \
-  -d '{
-    "baseline_embeddings": [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]],
-    "current_embeddings": [[0.8, 0.9, 1.0], [1.1, 1.2, 1.3]],
-    "model_name": "test-model",
-    "threshold": 0.1
-  }'
-```
-
-## API Endpoints
-
-- `POST /api/v1/comparison/detect` - Compare embeddings for drift
-- `GET /api/v1/comparison/health` - Service health check
-- `GET /metrics` - Prometheus metrics
-
-## Infrastructure
-
-- **Terraform**: GCP infrastructure provisioning
-- **Kubernetes**: Container orchestration with Istio
-- **Prometheus**: Metrics collection and alerting
-- **Circuit breaker**: Resilience patterns
-
-## Skills Demonstrated
-
-- **ML/AI**: Embedding drift detection, statistical analysis
-- **Backend**: FastAPI, REST APIs, error handling
-- **Infrastructure**: Terraform, Kubernetes, Istio
-- **SRE**: Prometheus, alerting, circuit breakers
-- **DevOps**: Docker, CI/CD, monitoring
-- **Database**: Time series storage, metrics collection
-
-## Development
-
+### Local Development
 ```bash
 # Install dependencies
 pip install -r requirements.txt
 
-# Run tests
-pytest tests/ -v
+# Start services
+docker-compose up -d redis postgres
 
-# Apply infrastructure
-cd terraform && terraform apply
+# Run the service
+python -m src.main
+```
+
+### Production Deployment
+```bash
+# Deploy infrastructure
+cd terraform
+terraform init && terraform apply
 
 # Deploy to Kubernetes
-kubectl apply -f k8s/
+kubectl apply -k k8s/
 ```
 
 ## Configuration
 
-Environment variables:
-- `DRIFT_THRESHOLD`: Default drift detection threshold (0.1)
-- `PROMETHEUS_PORT`: Metrics server port (9090)
-- `LOG_LEVEL`: Logging level (INFO)
-- `SLACK_WEBHOOK_URL`: Slack notifications
-- `PAGERDUTY_API_KEY`: PagerDuty integration
+```yaml
+drift_detection:
+  window_size: 1000
+  similarity_threshold: 0.85
+  statistical_significance: 0.05
+
+monitoring:
+  metrics_port: 8080
+  health_check_interval: 30
+  dimension_validation: true
+
+alerting:
+  slack_webhook: ${SLACK_WEBHOOK_URL}
+  pagerduty_key: ${PAGERDUTY_INTEGRATION_KEY}
+  email_smtp: ${SMTP_SERVER}
+```
+
+## API Usage
+
+```python
+import requests
+
+# Register model dimension
+response = requests.post('/api/v1/models/bert-base/dimension', 
+                        json={'dimension': 768})
+
+# Compare embeddings
+response = requests.post('/api/v1/compare', json={
+    'model_id': 'bert-base',
+    'embedding': [0.1, 0.2, ...],  # 768-dim vector
+    'reference_set': 'production-baseline'
+})
+
+print(response.json())
+# {
+#   "drift_score": 0.23,
+#   "is_anomaly": false,
+#   "confidence": 0.95,
+#   "dimension_valid": true
+# }
+```
+
+## Monitoring & Observability
+
+### Prometheus Metrics
+- `embedding_drift_score` - Current drift score by model
+- `embedding_dimensions_violations_total` - Dimension consistency violations
+- `embedding_similarity_avg` - Average similarity in time window
+- `drift_alerts_fired_total` - Count of drift alerts by severity
+
+### Health Checks
+- `/health` - Service health status
+- `/health/redis` - Redis connectivity
+- `/health/postgres` - Database connectivity
+- `/metrics` - Prometheus metrics endpoint
+
+## Technology Stack
+
+- **Python 3.11+**: Core application
+- **FastAPI**: REST API framework
+- **Redis**: High-performance caching
+- **PostgreSQL**: Persistent storage
+- **Terraform**: Infrastructure as code
+- **Kubernetes**: Container orchestration
+- **Prometheus**: Metrics collection
+- **Docker**: Containerization
+
+## Testing
+
+```bash
+# Run all tests
+pytest
+
+# Run with coverage
+pytest --cov=src/
+
+# Integration tests
+pytest tests/integration/
+```
+
+## License
+
+MIT License - see LICENSE file for details.
