@@ -1,88 +1,106 @@
-from typing import Optional, List, Dict, Any
 import redis
-import pickle
+import redis.connection
 import logging
+import time
+from typing import Optional, List, Any
+from contextlib import contextmanager
 from dataclasses import dataclass
-import numpy as np
-from datetime import datetime, timedelta
 
-logger = logging.getLogger(__name__)
 
 @dataclass
-class CacheConfig:
+class RedisConfig:
     host: str = "localhost"
     port: int = 6379
     db: int = 0
-    password: Optional[str] = None
-    ttl_seconds: int = 3600  # 1 hour default
-    max_connections: int = 10
+    max_connections: int = 20
+    retry_attempts: int = 3
+    retry_delay: float = 0.5
+    socket_timeout: int = 30
+    health_check_interval: int = 30
 
-class EmbeddingCache:
-    """Redis-based cache for embedding vectors and drift metrics."""
-    
-    def __init__(self, config: CacheConfig):
+
+class RedisCache:
+    def __init__(self, config: RedisConfig):
         self.config = config
-        self.redis = redis.ConnectionPool(
+        self.logger = logging.getLogger(__name__)
+        
+        self.pool = redis.ConnectionPool(
             host=config.host,
             port=config.port,
             db=config.db,
-            password=config.password,
             max_connections=config.max_connections,
-            decode_responses=False
+            socket_timeout=config.socket_timeout,
+            health_check_interval=config.health_check_interval,
+            retry_on_timeout=True
         )
-        self.client = redis.Redis(connection_pool=self.redis)
         
-    def get_embedding(self, key: str) -> Optional[np.ndarray]:
-        """Retrieve embedding vector from cache."""
-        try:
-            data = self.client.get(f"embedding:{key}")
-            if data:
-                return pickle.loads(data)
-            return None
-        except Exception as e:
-            logger.warning(f"Cache read failed for {key}: {e}")
-            return None
+        self.client = redis.Redis(connection_pool=self.pool)
+        self._test_connection()
     
-    def set_embedding(self, key: str, embedding: np.ndarray) -> bool:
-        """Store embedding vector in cache with TTL."""
+    def _test_connection(self) -> None:
+        """Test Redis connection on startup"""
         try:
-            data = pickle.dumps(embedding)
-            return self.client.setex(
-                f"embedding:{key}", 
-                self.config.ttl_seconds, 
-                data
-            )
-        except Exception as e:
-            logger.error(f"Cache write failed for {key}: {e}")
-            return False
+            self.client.ping()
+            self.logger.info("Redis connection established")
+        except redis.RedisError as e:
+            self.logger.error(f"Failed to connect to Redis: {e}")
+            raise
     
-    def get_drift_metrics(self, window_key: str) -> Optional[Dict[str, float]]:
-        """Get cached drift metrics for a time window."""
-        try:
-            data = self.client.get(f"drift:{window_key}")
-            if data:
-                return pickle.loads(data)
-            return None
-        except Exception as e:
-            logger.warning(f"Drift metrics cache read failed: {e}")
-            return None
+    def _retry_operation(self, operation, *args, **kwargs) -> Any:
+        """Retry Redis operations with exponential backoff"""
+        last_exception = None
+        
+        for attempt in range(self.config.retry_attempts):
+            try:
+                return operation(*args, **kwargs)
+            except (redis.ConnectionError, redis.TimeoutError) as e:
+                last_exception = e
+                if attempt < self.config.retry_attempts - 1:
+                    delay = self.config.retry_delay * (2 ** attempt)
+                    self.logger.warning(
+                        f"Redis operation failed (attempt {attempt + 1}), "
+                        f"retrying in {delay}s: {e}"
+                    )
+                    time.sleep(delay)
+                else:
+                    self.logger.error(f"Redis operation failed after {self.config.retry_attempts} attempts")
+        
+        raise last_exception
     
-    def set_drift_metrics(self, window_key: str, metrics: Dict[str, float]) -> bool:
-        """Cache drift metrics with shorter TTL."""
+    def get(self, key: str) -> Optional[bytes]:
+        """Get value with retry logic"""
+        return self._retry_operation(self.client.get, key)
+    
+    def set(self, key: str, value: Any, ttl: Optional[int] = None) -> bool:
+        """Set value with retry logic"""
+        return self._retry_operation(self.client.set, key, value, ex=ttl)
+    
+    def delete(self, key: str) -> int:
+        """Delete key with retry logic"""
+        return self._retry_operation(self.client.delete, key)
+    
+    @contextmanager
+    def pipeline(self):
+        """Context manager for Redis pipeline with retry"""
+        pipe = None
         try:
-            data = pickle.dumps(metrics)
-            return self.client.setex(
-                f"drift:{window_key}",
-                min(300, self.config.ttl_seconds),  # 5min max for metrics
-                data
-            )
+            pipe = self.client.pipeline()
+            yield pipe
+            self._retry_operation(pipe.execute)
         except Exception as e:
-            logger.error(f"Drift metrics cache write failed: {e}")
-            return False
+            if pipe:
+                pipe.reset()
+            raise e
     
     def health_check(self) -> bool:
-        """Check if Redis connection is healthy."""
+        """Check if Redis is healthy"""
         try:
-            return self.client.ping()
-        except Exception:
+            self.client.ping()
+            return True
+        except redis.RedisError:
             return False
+    
+    def close(self) -> None:
+        """Close connection pool"""
+        self.pool.disconnect()
+        self.logger.info("Redis connection pool closed")
