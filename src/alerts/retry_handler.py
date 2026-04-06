@@ -1,85 +1,108 @@
 import asyncio
 import logging
 from typing import Callable, Any, Optional
+from datetime import datetime, timedelta
 from dataclasses import dataclass
-import random
+from enum import Enum
 
 logger = logging.getLogger(__name__)
+
+class RetryStrategy(Enum):
+    EXPONENTIAL = "exponential"
+    LINEAR = "linear"
+    FIXED = "fixed"
 
 @dataclass
 class RetryConfig:
     max_retries: int = 3
-    base_delay: float = 1.0
+    initial_delay: float = 1.0
     max_delay: float = 60.0
-    exponential_base: float = 2.0
-    jitter: bool = True
+    backoff_multiplier: float = 2.0
+    strategy: RetryStrategy = RetryStrategy.EXPONENTIAL
+    circuit_breaker_threshold: int = 5
+    circuit_breaker_timeout: int = 300  # 5 minutes
+
+class CircuitState(Enum):
+    CLOSED = "closed"
+    OPEN = "open"
+    HALF_OPEN = "half_open"
 
 class RetryHandler:
-    def __init__(self, config: RetryConfig = None):
+    def __init__(self, config: Optional[RetryConfig] = None):
         self.config = config or RetryConfig()
-    
-    async def retry_async(
+        self.failure_count = 0
+        self.last_failure_time: Optional[datetime] = None
+        self.circuit_state = CircuitState.CLOSED
+        
+    async def execute_with_retry(
         self, 
         func: Callable, 
         *args, 
         **kwargs
     ) -> Any:
-        """Retry async function with exponential backoff"""
+        """Execute function with retry logic and circuit breaker."""
+        
+        if self._is_circuit_open():
+            raise Exception("Circuit breaker is OPEN - too many failures")
+            
         last_exception = None
         
         for attempt in range(self.config.max_retries + 1):
             try:
-                return await func(*args, **kwargs)
+                result = await func(*args, **kwargs)
+                self._on_success()
+                return result
+                
             except Exception as e:
                 last_exception = e
+                self._on_failure()
                 
-                if attempt == self.config.max_retries:
-                    logger.error(f"Final retry failed: {e}")
-                    raise e
-                
-                delay = self._calculate_delay(attempt)
-                logger.warning(
-                    f"Attempt {attempt + 1} failed: {e}. "
-                    f"Retrying in {delay:.2f}s"
-                )
-                await asyncio.sleep(delay)
-        
-        raise last_exception
-    
-    def retry_sync(self, func: Callable, *args, **kwargs) -> Any:
-        """Retry sync function with exponential backoff"""
-        import time
-        last_exception = None
-        
-        for attempt in range(self.config.max_retries + 1):
-            try:
-                return func(*args, **kwargs)
-            except Exception as e:
-                last_exception = e
-                
-                if attempt == self.config.max_retries:
-                    logger.error(f"Final retry failed: {e}")
-                    raise e
-                
-                delay = self._calculate_delay(attempt)
-                logger.warning(
-                    f"Attempt {attempt + 1} failed: {e}. "
-                    f"Retrying in {delay:.2f}s"
-                )
-                time.sleep(delay)
-        
+                if attempt < self.config.max_retries:
+                    delay = self._calculate_delay(attempt)
+                    logger.warning(
+                        f"Attempt {attempt + 1} failed: {e}. Retrying in {delay}s"
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    logger.error(f"All {self.config.max_retries + 1} attempts failed")
+                    
         raise last_exception
     
     def _calculate_delay(self, attempt: int) -> float:
-        """Calculate delay with exponential backoff and jitter"""
-        delay = min(
-            self.config.base_delay * (self.config.exponential_base ** attempt),
-            self.config.max_delay
-        )
+        """Calculate delay based on retry strategy."""
+        if self.config.strategy == RetryStrategy.FIXED:
+            return self.config.initial_delay
+        elif self.config.strategy == RetryStrategy.LINEAR:
+            return min(self.config.initial_delay * (attempt + 1), self.config.max_delay)
+        else:  # EXPONENTIAL
+            delay = self.config.initial_delay * (self.config.backoff_multiplier ** attempt)
+            return min(delay, self.config.max_delay)
+    
+    def _is_circuit_open(self) -> bool:
+        """Check if circuit breaker is open."""
+        if self.circuit_state == CircuitState.CLOSED:
+            return False
+            
+        if self.circuit_state == CircuitState.OPEN:
+            if self.last_failure_time and \
+               (datetime.now() - self.last_failure_time).seconds > self.config.circuit_breaker_timeout:
+                self.circuit_state = CircuitState.HALF_OPEN
+                return False
+            return True
+            
+        return False  # HALF_OPEN
+    
+    def _on_success(self):
+        """Reset circuit breaker on success."""
+        self.failure_count = 0
+        self.circuit_state = CircuitState.CLOSED
+        self.last_failure_time = None
         
-        if self.config.jitter:
-            # Add ±25% jitter
-            jitter_range = delay * 0.25
-            delay += random.uniform(-jitter_range, jitter_range)
+    def _on_failure(self):
+        """Track failure and potentially open circuit."""
+        self.failure_count += 1
+        self.last_failure_time = datetime.now()
         
-        return max(0, delay)
+        if self.failure_count >= self.config.circuit_breaker_threshold:
+            self.circuit_state = CircuitState.OPEN
+            logger.error(f"Circuit breaker OPEN after {self.failure_count} failures")
