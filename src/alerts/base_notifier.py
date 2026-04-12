@@ -1,37 +1,117 @@
-"""Base class for alert notifiers with retry support."""
+import logging
+import time
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
-import logging
+from dataclasses import dataclass
+from enum import Enum
 
-from .retry_handler import RetryHandler, RetryConfig
+class AlertSeverity(Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
 
-logger = logging.getLogger(__name__)
+@dataclass
+class AlertContext:
+    alert_id: str
+    timestamp: float
+    severity: AlertSeverity
+    service: str
+    metadata: Dict[str, Any]
+    retry_count: int = 0
+
+class NotificationError(Exception):
+    """Base exception for notification failures"""
+    def __init__(self, message: str, context: Optional[AlertContext] = None, retry_after: Optional[int] = None):
+        super().__init__(message)
+        self.context = context
+        self.retry_after = retry_after
 
 class BaseNotifier(ABC):
-    """Base class for all alert notifiers."""
+    """Base class for all notification providers with structured logging"""
     
-    def __init__(self, retry_config: Optional[RetryConfig] = None):
-        self.retry_handler = RetryHandler(retry_config)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        self.name = name
+        self.config = config
+        self.logger = logging.getLogger(f"alerts.{name}")
+        self._setup_logging()
+    
+    def _setup_logging(self) -> None:
+        """Configure structured logging for this notifier"""
+        handler = logging.StreamHandler()
+        formatter = logging.Formatter(
+            '[%(asctime)s] %(name)s %(levelname)s: %(message)s'
+        )
+        handler.setFormatter(formatter)
+        self.logger.addHandler(handler)
+        self.logger.setLevel(logging.INFO)
+    
+    def send_alert(self, context: AlertContext) -> bool:
+        """Send alert with comprehensive error handling and logging"""
+        start_time = time.time()
         
-    @abstractmethod
-    async def _send_alert(self, alert_data: Dict[str, Any]) -> bool:
-        """Send alert implementation - must be implemented by subclasses."""
-        pass
-    
-    async def send_alert_with_retry(self, alert_data: Dict[str, Any]) -> bool:
-        """Send alert with retry mechanism."""
+        self.logger.info(
+            "Sending alert",
+            extra={
+                "alert_id": context.alert_id,
+                "severity": context.severity.value,
+                "service": context.service,
+                "retry_count": context.retry_count,
+                "notifier": self.name
+            }
+        )
+        
         try:
-            result = await self.retry_handler.retry_async(
-                self._send_alert, 
-                alert_data
+            success = self._send_notification(context)
+            duration = time.time() - start_time
+            
+            if success:
+                self.logger.info(
+                    "Alert sent successfully",
+                    extra={
+                        "alert_id": context.alert_id,
+                        "duration_ms": round(duration * 1000, 2),
+                        "notifier": self.name
+                    }
+                )
+            else:
+                self.logger.warning(
+                    "Alert sending failed",
+                    extra={
+                        "alert_id": context.alert_id,
+                        "duration_ms": round(duration * 1000, 2),
+                        "notifier": self.name
+                    }
+                )
+            
+            return success
+            
+        except NotificationError as e:
+            self.logger.error(
+                "Notification error",
+                extra={
+                    "alert_id": context.alert_id,
+                    "error": str(e),
+                    "retry_after": e.retry_after,
+                    "notifier": self.name
+                },
+                exc_info=True
             )
-            logger.info(f"Alert sent successfully via {self.__class__.__name__}")
-            return result
+            return False
+            
         except Exception as e:
-            logger.error(f"Failed to send alert via {self.__class__.__name__}: {str(e)}")
+            self.logger.error(
+                "Unexpected error during notification",
+                extra={
+                    "alert_id": context.alert_id,
+                    "error": str(e),
+                    "notifier": self.name
+                },
+                exc_info=True
+            )
             return False
     
     @abstractmethod
-    def validate_config(self) -> bool:
-        """Validate notifier configuration."""
+    def _send_notification(self, context: AlertContext) -> bool:
+        """Implementation-specific notification logic"""
         pass
