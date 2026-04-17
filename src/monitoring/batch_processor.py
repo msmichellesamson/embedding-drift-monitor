@@ -1,113 +1,94 @@
-"""Batch processor for efficient vector health metrics collection."""
-
 import asyncio
 import logging
+import signal
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
-from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
 
+logger = logging.getLogger(__name__)
 
 @dataclass
-class MetricsBatch:
-    """Batch of metrics to process."""
-    vectors: List[Dict[str, Any]]
-    timestamp: float
-    batch_id: str
-    metadata: Dict[str, Any]
-
+class BatchConfig:
+    batch_size: int = 100
+    batch_timeout: float = 5.0
+    max_workers: int = 4
+    retry_attempts: int = 3
+    backoff_factor: float = 1.5
 
 class BatchProcessor:
-    """Process vector metrics in batches for better performance."""
+    def __init__(self, config: BatchConfig):
+        self.config = config
+        self._shutdown_event = asyncio.Event()
+        self._executor = ThreadPoolExecutor(max_workers=config.max_workers)
+        self._setup_signal_handlers()
+        
+    def _setup_signal_handlers(self):
+        """Setup graceful shutdown on SIGTERM/SIGINT"""
+        def signal_handler(signum, frame):
+            logger.info(f"Received signal {signum}, initiating shutdown...")
+            self._shutdown_event.set()
+            
+        signal.signal(signal.SIGTERM, signal_handler)
+        signal.signal(signal.SIGINT, signal_handler)
     
-    def __init__(
-        self,
-        batch_size: int = 100,
-        flush_interval: float = 30.0,
-        max_batches: int = 10
-    ):
-        self.batch_size = batch_size
-        self.flush_interval = flush_interval
-        self.max_batches = max_batches
-        self._batches: List[MetricsBatch] = []
-        self._current_batch: List[Dict[str, Any]] = []
-        self._metrics_buffer = defaultdict(list)
-        self._logger = logging.getLogger(__name__)
-        self._processing = False
+    async def process_embeddings_batch(self, embeddings: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Process batch of embeddings with error handling and retry logic"""
+        if not embeddings:
+            return {"processed": 0, "errors": []}
+            
+        batch_results = {"processed": 0, "errors": []}
+        
+        # Split into smaller chunks for parallel processing
+        chunks = [embeddings[i:i + self.config.batch_size] 
+                 for i in range(0, len(embeddings), self.config.batch_size)]
+        
+        futures = []
+        for chunk in chunks:
+            if self._shutdown_event.is_set():
+                logger.warning("Shutdown requested, stopping batch processing")
+                break
+                
+            future = self._executor.submit(self._process_chunk_with_retry, chunk)
+            futures.append(future)
+            
+        # Collect results with timeout
+        for future in as_completed(futures, timeout=self.config.batch_timeout * len(chunks)):
+            try:
+                chunk_result = future.result()
+                batch_results["processed"] += chunk_result.get("processed", 0)
+                batch_results["errors"].extend(chunk_result.get("errors", []))
+            except Exception as e:
+                logger.error(f"Chunk processing failed: {e}")
+                batch_results["errors"].append(str(e))
+                
+        return batch_results
     
-    async def add_vector(self, vector_data: Dict[str, Any]) -> None:
-        """Add vector to current batch."""
-        try:
-            self._current_batch.append(vector_data)
-            
-            if len(self._current_batch) >= self.batch_size:
-                await self._flush_current_batch()
-        except Exception as e:
-            self._logger.error(f"Failed to add vector to batch: {e}")
-            raise
+    def _process_chunk_with_retry(self, chunk: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Process chunk with exponential backoff retry"""
+        for attempt in range(self.config.retry_attempts):
+            try:
+                return self._process_chunk(chunk)
+            except Exception as e:
+                if attempt == self.config.retry_attempts - 1:
+                    logger.error(f"Chunk processing failed after {self.config.retry_attempts} attempts: {e}")
+                    return {"processed": 0, "errors": [str(e)]}
+                    
+                wait_time = self.config.backoff_factor ** attempt
+                logger.warning(f"Chunk processing attempt {attempt + 1} failed, retrying in {wait_time}s: {e}")
+                time.sleep(wait_time)
+                
+        return {"processed": 0, "errors": ["Max retries exceeded"]}
     
-    async def _flush_current_batch(self) -> None:
-        """Flush current batch to processing queue."""
-        if not self._current_batch:
-            return
-        
-        import time
-        import uuid
-        
-        batch = MetricsBatch(
-            vectors=self._current_batch.copy(),
-            timestamp=time.time(),
-            batch_id=str(uuid.uuid4())[:8],
-            metadata={"size": len(self._current_batch)}
-        )
-        
-        self._batches.append(batch)
-        self._current_batch.clear()
-        
-        # Keep only recent batches
-        if len(self._batches) > self.max_batches:
-            self._batches = self._batches[-self.max_batches:]
-        
-        self._logger.debug(f"Flushed batch {batch.batch_id} with {len(batch.vectors)} vectors")
+    def _process_chunk(self, chunk: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Process individual chunk - override in subclasses"""
+        # Simulate processing
+        logger.info(f"Processing chunk of {len(chunk)} embeddings")
+        return {"processed": len(chunk), "errors": []}
     
-    async def process_batches(self) -> Dict[str, Any]:
-        """Process all pending batches and return aggregated metrics."""
-        if self._processing:
-            self._logger.warning("Batch processing already in progress")
-            return {}
-        
-        self._processing = True
-        try:
-            # Flush any pending vectors
-            await self._flush_current_batch()
-            
-            if not self._batches:
-                return {}
-            
-            # Process all batches
-            results = await self._process_all_batches()
-            
-            # Clear processed batches
-            self._batches.clear()
-            
-            return results
-        finally:
-            self._processing = False
-    
-    async def _process_all_batches(self) -> Dict[str, Any]:
-        """Process all batches and aggregate results."""
-        total_vectors = 0
-        dimension_counts = defaultdict(int)
-        
-        for batch in self._batches:
-            total_vectors += len(batch.vectors)
-            
-            for vector_data in batch.vectors:
-                if 'dimensions' in vector_data:
-                    dimension_counts[vector_data['dimensions']] += 1
-        
-        return {
-            'total_vectors_processed': total_vectors,
-            'batches_processed': len(self._batches),
-            'dimension_distribution': dict(dimension_counts),
-            'processing_timestamp': asyncio.get_event_loop().time()
-        }
+    async def shutdown(self):
+        """Graceful shutdown with connection cleanup"""
+        logger.info("Shutting down batch processor...")
+        self._shutdown_event.set()
+        self._executor.shutdown(wait=True)
+        logger.info("Batch processor shutdown complete")
