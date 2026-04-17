@@ -1,24 +1,31 @@
 # Embedding Drift Monitor
 
-Production ML monitoring system that detects embedding drift and model degradation in real-time using statistical analysis and observability.
+Production ML monitoring system that detects embedding drift and model degradation in real-time.
 
 ## Architecture
 
-- **Core Engine**: Real-time drift detection with circuit breaker patterns
-- **Storage**: PostgreSQL + Redis caching with connection pooling
-- **Monitoring**: Prometheus metrics + Grafana dashboards
-- **Alerts**: Multi-channel notifications (Slack, PagerDuty, Discord, Email)
-- **Infrastructure**: Kubernetes deployment with Istio service mesh
+**Core Components:**
+- **Drift Detection**: Real-time embedding drift analysis with statistical tests
+- **Vector Health**: Dimension validation and cluster health monitoring
+- **Quality Tracking**: Model performance degradation detection
+- **Alert System**: Multi-channel notifications (Slack, PagerDuty, Teams, Email, Discord, Webhooks)
+- **Circuit Breaker**: Auto-failover with configurable thresholds
+
+**Infrastructure:**
+- **Database**: PostgreSQL for metadata, Redis for caching
+- **Kubernetes**: Full production deployment with RBAC, HPA, network policies
+- **Observability**: Prometheus metrics, Grafana dashboards, structured logging
+- **Security**: Service accounts, network policies, Istio service mesh
 
 ## Skills Demonstrated
 
-- **AI/ML**: Embedding drift detection, statistical anomaly detection, vector similarity analysis
-- **Backend**: FastAPI microservice, gRPC, circuit breaker patterns
-- **Database**: PostgreSQL optimization, Redis caching, connection pooling
-- **Infrastructure**: Terraform (GCP), Kubernetes manifests, Istio configuration
-- **SRE**: Prometheus monitoring, alerting rules, health checks
-- **DevOps**: Docker containerization, CI/CD pipeline, GitOps
-- **Data**: Real-time streaming analysis, time series processing
+- **ML/AI**: Embedding drift detection, vector similarity analysis, statistical testing
+- **Infrastructure**: Terraform (GCP), Kubernetes, Redis, PostgreSQL
+- **SRE**: Prometheus monitoring, circuit breakers, health checks, alerting
+- **Backend**: FastAPI, async processing, distributed architecture
+- **Database**: PostgreSQL optimization, Redis caching strategies
+- **DevOps**: K8s manifests, CI/CD pipeline, container orchestration
+- **Data**: Real-time processing, batch analysis, time series detection
 
 ## Quick Start
 
@@ -27,40 +34,31 @@ Production ML monitoring system that detects embedding drift and model degradati
 cd terraform && terraform apply
 
 # Deploy to Kubernetes
-kubectl apply -f k8s/
+kubectl apply -k k8s/
 
 # Local development
-docker build -f docker/Dockerfile -t embedding-drift-monitor .
-docker run -p 8080:8080 embedding-drift-monitor
+docker build -f docker/Dockerfile -t drift-monitor .
+docker run -p 8000:8000 drift-monitor
 ```
 
 ## API Endpoints
 
-- `POST /api/v1/embeddings/store` - Store reference embeddings
-- `POST /api/v1/embeddings/compare` - Compare against baseline
-- `GET /api/v1/similarity/{embedding_id}` - Get similarity metrics
-- `GET /health` - Health check endpoint
-- `GET /metrics` - Prometheus metrics
-
-## Infrastructure
-
-- **Kubernetes**: HPA, network policies, Istio service mesh
-- **Monitoring**: Prometheus + Grafana with custom dashboards
-- **Database**: PostgreSQL with connection pooling
-- **Cache**: Redis cluster for performance
-- **Security**: Network policies, RBAC, secret management
-
-## Testing
-
-```bash
-pytest tests/ -v
-pytest tests/integration/ -v --integration
-```
+- `POST /embeddings/compare` - Compare embedding batches for drift
+- `POST /embeddings/validate` - Validate embedding quality
+- `GET /health/vector/{model_id}` - Get vector health metrics
+- `GET /metrics` - Prometheus metrics endpoint
 
 ## Monitoring
 
-Prometheus metrics available at `/metrics`:
-- `drift_detection_total` - Total drift detections
-- `embedding_processing_duration` - Processing latency
-- `similarity_score_histogram` - Score distribution
-- `circuit_breaker_state` - Circuit breaker status
+- **Metrics**: Custom Prometheus metrics for drift detection
+- **Alerts**: Configurable thresholds with severity levels
+- **Health Checks**: Kubernetes readiness/liveness probes
+- **Circuit Breaker**: Automatic failover on service degradation
+
+## Production Features
+
+- Async batch processing with configurable concurrency
+- Multi-algorithm drift detection (KL divergence, Wasserstein, KS test)
+- Automatic model degradation alerts
+- High availability with circuit breakers
+- Comprehensive observability and logging
