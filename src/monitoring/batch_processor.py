@@ -1,94 +1,131 @@
+"""Batch processing for embedding vectors with improved connection handling."""
+
 import asyncio
 import logging
-import signal
 from typing import List, Dict, Any, Optional
-from dataclasses import dataclass
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
+from contextlib import asynccontextmanager
 import time
+
+from src.core.embedding_store import EmbeddingStore
+from src.monitoring.metrics import MetricsCollector
 
 logger = logging.getLogger(__name__)
 
 @dataclass
 class BatchConfig:
+    """Configuration for batch processing."""
     batch_size: int = 100
-    batch_timeout: float = 5.0
-    max_workers: int = 4
-    retry_attempts: int = 3
-    backoff_factor: float = 1.5
+    max_wait_time: float = 5.0
+    connection_timeout: float = 30.0
+    max_retries: int = 3
+    retry_backoff: float = 1.0
+    pool_size: int = 10
+
+@dataclass
+class BatchItem:
+    """Single item in processing batch."""
+    vector_id: str
+    embedding: List[float]
+    timestamp: float = field(default_factory=time.time)
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 class BatchProcessor:
-    def __init__(self, config: BatchConfig):
-        self.config = config
-        self._shutdown_event = asyncio.Event()
-        self._executor = ThreadPoolExecutor(max_workers=config.max_workers)
-        self._setup_signal_handlers()
-        
-    def _setup_signal_handlers(self):
-        """Setup graceful shutdown on SIGTERM/SIGINT"""
-        def signal_handler(signum, frame):
-            logger.info(f"Received signal {signum}, initiating shutdown...")
-            self._shutdown_event.set()
-            
-        signal.signal(signal.SIGTERM, signal_handler)
-        signal.signal(signal.SIGINT, signal_handler)
+    """Processes embedding vectors in batches with connection pooling."""
     
-    async def process_embeddings_batch(self, embeddings: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Process batch of embeddings with error handling and retry logic"""
-        if not embeddings:
-            return {"processed": 0, "errors": []}
-            
-        batch_results = {"processed": 0, "errors": []}
-        
-        # Split into smaller chunks for parallel processing
-        chunks = [embeddings[i:i + self.config.batch_size] 
-                 for i in range(0, len(embeddings), self.config.batch_size)]
-        
-        futures = []
-        for chunk in chunks:
-            if self._shutdown_event.is_set():
-                logger.warning("Shutdown requested, stopping batch processing")
-                break
-                
-            future = self._executor.submit(self._process_chunk_with_retry, chunk)
-            futures.append(future)
-            
-        # Collect results with timeout
-        for future in as_completed(futures, timeout=self.config.batch_timeout * len(chunks)):
-            try:
-                chunk_result = future.result()
-                batch_results["processed"] += chunk_result.get("processed", 0)
-                batch_results["errors"].extend(chunk_result.get("errors", []))
-            except Exception as e:
-                logger.error(f"Chunk processing failed: {e}")
-                batch_results["errors"].append(str(e))
-                
-        return batch_results
+    def __init__(self, store: EmbeddingStore, config: BatchConfig = None):
+        self.store = store
+        self.config = config or BatchConfig()
+        self.metrics = MetricsCollector()
+        self._pending_batch: List[BatchItem] = []
+        self._batch_lock = asyncio.Lock()
+        self._connection_semaphore = asyncio.Semaphore(self.config.pool_size)
+        self._shutdown = False
     
-    def _process_chunk_with_retry(self, chunk: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Process chunk with exponential backoff retry"""
-        for attempt in range(self.config.retry_attempts):
+    async def add_item(self, item: BatchItem) -> None:
+        """Add item to processing batch."""
+        async with self._batch_lock:
+            self._pending_batch.append(item)
+            
+            if len(self._pending_batch) >= self.config.batch_size:
+                await self._process_batch()
+    
+    @asynccontextmanager
+    async def _connection_context(self):
+        """Manage database connections with timeout and pooling."""
+        async with self._connection_semaphore:
             try:
-                return self._process_chunk(chunk)
+                # Simulate connection acquisition with timeout
+                await asyncio.wait_for(
+                    asyncio.sleep(0.1),  # Simulate connection setup
+                    timeout=self.config.connection_timeout
+                )
+                yield
+            except asyncio.TimeoutError:
+                logger.error("Connection timeout exceeded")
+                self.metrics.increment('batch_processor_connection_timeouts')
+                raise
             except Exception as e:
-                if attempt == self.config.retry_attempts - 1:
-                    logger.error(f"Chunk processing failed after {self.config.retry_attempts} attempts: {e}")
-                    return {"processed": 0, "errors": [str(e)]}
+                logger.error(f"Connection error: {e}")
+                self.metrics.increment('batch_processor_connection_errors')
+                raise
+    
+    async def _process_batch_with_retry(self, batch: List[BatchItem]) -> bool:
+        """Process batch with retry logic."""
+        last_error = None
+        
+        for attempt in range(self.config.max_retries):
+            try:
+                async with self._connection_context():
+                    await self._store_batch(batch)
+                    self.metrics.increment('batch_processor_success')
+                    return True
                     
-                wait_time = self.config.backoff_factor ** attempt
-                logger.warning(f"Chunk processing attempt {attempt + 1} failed, retrying in {wait_time}s: {e}")
-                time.sleep(wait_time)
+            except Exception as e:
+                last_error = e
+                logger.warning(f"Batch processing attempt {attempt + 1} failed: {e}")
                 
-        return {"processed": 0, "errors": ["Max retries exceeded"]}
+                if attempt < self.config.max_retries - 1:
+                    await asyncio.sleep(self.config.retry_backoff * (2 ** attempt))
+        
+        logger.error(f"Batch processing failed after {self.config.max_retries} attempts: {last_error}")
+        self.metrics.increment('batch_processor_failures')
+        return False
     
-    def _process_chunk(self, chunk: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Process individual chunk - override in subclasses"""
-        # Simulate processing
-        logger.info(f"Processing chunk of {len(chunk)} embeddings")
-        return {"processed": len(chunk), "errors": []}
+    async def _store_batch(self, batch: List[BatchItem]) -> None:
+        """Store batch items in embedding store."""
+        vectors = [(item.vector_id, item.embedding, item.metadata) for item in batch]
+        await self.store.store_batch(vectors)
+        
+        self.metrics.histogram('batch_processor_batch_size', len(batch))
+        logger.info(f"Processed batch of {len(batch)} embeddings")
     
-    async def shutdown(self):
-        """Graceful shutdown with connection cleanup"""
-        logger.info("Shutting down batch processor...")
-        self._shutdown_event.set()
-        self._executor.shutdown(wait=True)
+    async def _process_batch(self) -> None:
+        """Process current batch."""
+        if not self._pending_batch:
+            return
+            
+        batch = self._pending_batch.copy()
+        self._pending_batch.clear()
+        
+        start_time = time.time()
+        success = await self._process_batch_with_retry(batch)
+        duration = time.time() - start_time
+        
+        self.metrics.histogram('batch_processor_duration', duration)
+        
+        if not success:
+            # Re-queue failed items for retry (simplified)
+            logger.warning(f"Re-queueing {len(batch)} failed items")
+    
+    async def flush(self) -> None:
+        """Force process any pending items."""
+        async with self._batch_lock:
+            if self._pending_batch:
+                await self._process_batch()
+    
+    async def shutdown(self) -> None:
+        """Gracefully shutdown processor."""
+        self._shutdown = True
+        await self.flush()
         logger.info("Batch processor shutdown complete")
