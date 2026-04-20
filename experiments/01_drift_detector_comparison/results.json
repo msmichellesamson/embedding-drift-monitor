@@ -1,0 +1,103 @@
+{
+  "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+  "embedding_dim": 384,
+  "reference_n": 500,
+  "test_distributions": {
+    "control (100% World)": {
+      "per_dim_ks": {
+        "drift_flagged": false,
+        "min_pvalue": 0.019894110072361745,
+        "n_significant_dims": 0,
+        "n_dims": 384,
+        "bonferroni_threshold": 2.604166666666667e-05,
+        "elapsed_sec": 0.0685889579999639
+      },
+      "mmd": {
+        "drift_flagged": false,
+        "mmd_squared": -0.00039696693420410156,
+        "pvalue": 0.995,
+        "n_permutations": 200,
+        "elapsed_sec": 0.3574876670008962
+      },
+      "classifier_two_sample": {
+        "drift_flagged": false,
+        "mean_accuracy": 0.442,
+        "pvalue": 0.9998938016982319,
+        "n_splits": 5,
+        "elapsed_sec": 0.011242208000112441
+      }
+    },
+    "mild (80W/20B)": {
+      "per_dim_ks": {
+        "drift_flagged": false,
+        "min_pvalue": 0.00010844915031869944,
+        "n_significant_dims": 0,
+        "n_dims": 384,
+        "bonferroni_threshold": 2.604166666666667e-05,
+        "elapsed_sec": 0.06764724999993632
+      },
+      "mmd": {
+        "drift_flagged": true,
+        "mmd_squared": 0.002226591110229492,
+        "pvalue": 0.0,
+        "n_permutations": 200,
+        "elapsed_sec": 0.35344041700045636
+      },
+      "classifier_two_sample": {
+        "drift_flagged": true,
+        "mean_accuracy": 0.548,
+        "pvalue": 0.0013227649195721033,
+        "n_splits": 5,
+        "elapsed_sec": 0.0075447500003065215
+      }
+    },
+    "moderate (50W/50B)": {
+      "per_dim_ks": {
+        "drift_flagged": true,
+        "min_pvalue": 6.208915298066706e-19,
+        "n_significant_dims": 77,
+        "n_dims": 384,
+        "bonferroni_threshold": 2.604166666666667e-05,
+        "elapsed_sec": 0.06426641699908942
+      },
+      "mmd": {
+        "drift_flagged": true,
+        "mmd_squared": 0.01724112033843994,
+        "pvalue": 0.0,
+        "n_permutations": 200,
+        "elapsed_sec": 0.35155104200021015
+      },
+      "classifier_two_sample": {
+        "drift_flagged": true,
+        "mean_accuracy": 0.6849999999999999,
+        "pvalue": 1.7924396263343955e-32,
+        "n_splits": 5,
+        "elapsed_sec": 0.005800667000585236
+      }
+    },
+    "severe (100% Business)": {
+      "per_dim_ks": {
+        "drift_flagged": true,
+        "min_pvalue": 9.273032713380692e-69,
+        "n_significant_dims": 198,
+        "n_dims": 384,
+        "bonferroni_threshold": 2.604166666666667e-05,
+        "elapsed_sec": 0.06581974999971862
+      },
+      "mmd": {
+        "drift_flagged": true,
+        "mmd_squared": 0.06622707843780518,
+        "pvalue": 0.0,
+        "n_permutations": 200,
+        "elapsed_sec": 0.34935858300013933
+      },
+      "classifier_two_sample": {
+        "drift_flagged": true,
+        "mean_accuracy": 0.983,
+        "pvalue": 2.3286532948443704e-265,
+        "n_splits": 5,
+        "elapsed_sec": 0.0063056250000954606
+      }
+    }
+  }
+}
