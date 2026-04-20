@@ -50,35 +50,61 @@ k8s with RBAC and HPA, Prometheus + Grafana, structured logging.
 
 ## What I'm finding (so far)
 
-- Statistical tests on raw embedding dimensions are noisy. KS on individual
-  dimensions flags drift constantly because most embedding dimensions aren't
-  individually meaningful. MMD on whole vectors is more stable but expensive.
-- The right unit of comparison probably isn't "is the distribution different?"
-  but "**did downstream retrieval quality change?**" — which means I need
-  ground-truth retrieval pairs, not just unlabelled embeddings.
-- Per-cluster drift is more informative than global drift. If a specific
-  semantic region of the embedding space shifts, that's actionable; if the
-  whole space drifts uniformly, it's probably a model swap.
-- The alerting code is more mature than the detection code, which is a fair
-  reflection of where I spent time. The hard part of monitoring isn't
-  finding anomalies — it's deciding which ones to wake someone up for.
+I ran a controlled comparison on [AG News](https://huggingface.co/datasets/ag_news)
+with three drift detectors and four test distributions ranging from no
+drift to total topic swap. Full writeup in [`experiments/findings.md`](experiments/findings.md).
+
+**Detection (α = 0.01):**
+
+| Detector | control | mild (20% drift) | moderate (50%) | severe (100%) |
+|---|---|---|---|---|
+| per-dim KS (Bonferroni) | no drift | **MISS** | FLAG | FLAG |
+| MMD with permutation | no drift | FLAG | FLAG | FLAG |
+| classifier two-sample | no drift | FLAG | FLAG | FLAG |
+
+**Wall-clock per check:** classifier two-sample 0.01s · per-dim KS 0.07s · MMD 0.35s.
+
+- **Per-dim KS missed mild drift entirely.** Even with 20% of the test
+  distribution swapped to a different topic, no individual dimension
+  cleared the Bonferroni-corrected threshold. This is the case the
+  monitor most needs to catch and the one this method handles worst.
+- **The [classifier two-sample test](https://arxiv.org/abs/1610.06545)
+  is both the most sensitive AND the fastest** — about 30x faster than
+  MMD and the only one besides MMD that catches mild drift. That was
+  not what I expected before running this.
+- **MMD's score is the most useful severity signal.** MMD² grows
+  monotonically from 0.0002 (control) to 0.066 (severe), giving a
+  dimensionless number you can compare across runs. Classifier
+  accuracy is bounded by task separability, so its absolute value
+  is harder to read across deployments.
+- **No false positives on the control distribution** for any of the
+  three. That was the table-stakes check.
 
 ## What I'd do next
 
-- Build a retrieval-quality canary: a fixed set of (query, expected-doc)
-  pairs that I run continuously and treat the recall@k as the primary
-  signal. Distribution drift becomes a secondary explanatory metric.
-- Test on a real production embedding service. Synthetic drift is too easy
-  to detect.
-- Add a "drift root cause" view that correlates drift with model version
-  changes, traffic mix changes, and time-of-day patterns
-- Look at SAE feature activations as a more interpretable drift signal, in
-  the spirit of Anthropic's interpretability work
+- **Replace per-dim KS with the classifier two-sample test as the
+  primary detector** in `src/analysis/statistical_tests.py`, and keep
+  MMD as the secondary "is this serious?" signal. Per-dim KS gives
+  false confidence on the case that matters most (mild drift).
+- Add a **retrieval-quality canary**: a fixed set of (query, expected-doc)
+  pairs scored continuously. Distributional drift becomes the
+  explanatory metric for canary regressions, not the primary alarm.
+- Repeat the experiment with **per-cluster drift** — drift that only
+  affects one semantic region of the embedding space. AG News topic
+  swap is too clean a case; sub-topic drift inside a single category
+  is the harder, more realistic test.
+- Look at [SAE feature activations](https://transformer-circuits.pub/2024/scaling-monosemanticity/)
+  as a more interpretable drift signal — whether feature-level drift
+  is more diagnostic than raw embedding-level drift is genuinely an
+  open question to me.
 
 ## Status
 
-The pipeline runs. The detection thresholds are guesses. The alerting works
-and is the part I'm most happy with.
+The pipeline runs end-to-end. The detection comparison ([`experiments/findings.md`](experiments/findings.md))
+is real and reproducible. The alerting code is more mature than the
+detection code, which is a fair reflection of where I spent time —
+the hard part of monitoring isn't finding anomalies, it's deciding
+which ones to wake someone up for.
 
 ## References
 
