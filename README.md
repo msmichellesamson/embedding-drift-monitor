@@ -11,9 +11,9 @@ recall@k drops, similarity thresholds you tuned six months ago start
 under- or over-firing, and your evals don't notice because they're computed
 on a fixed test set.
 
-Anthropic's *Mapping the Mind of a Large Language Model* showed how
-**internal feature representations have real, measurable structure** — and
-implicitly, that structure can shift. I started wondering: how would you
+Anthropic's [*Mapping the Mind of a Large Language Model*](https://www.anthropic.com/research/mapping-mind-language-model)
+showed how **internal feature representations have real, measurable
+structure** — and implicitly, that structure can shift. I started wondering: how would you
 build a monitor that catches that shift early, before it becomes a quality
 incident?
 
@@ -82,8 +82,8 @@ and is the part I'm most happy with.
 
 ## References
 
-- Templeton et al., *Scaling Monosemanticity: Extracting Interpretable Features
-  from Claude 3 Sonnet* (Anthropic, 2024)
-- Gretton et al., *A Kernel Two-Sample Test* (JMLR, 2012)
-- Rabanser et al., *Failing Loudly: An Empirical Study of Methods for
-  Detecting Dataset Shift* (NeurIPS 2019)
+- Templeton et al., [*Scaling Monosemanticity: Extracting Interpretable Features from Claude 3 Sonnet*](https://transformer-circuits.pub/2024/scaling-monosemanticity/) (Anthropic, 2024)
+- Anthropic, [*Mapping the Mind of a Large Language Model*](https://www.anthropic.com/research/mapping-mind-language-model) (2024)
+- Gretton et al., [*A Kernel Two-Sample Test*](https://jmlr.org/papers/v13/gretton12a.html) (JMLR, 2012)
+- Rabanser et al., [*Failing Loudly: An Empirical Study of Methods for Detecting Dataset Shift*](https://arxiv.org/abs/1810.11953) (NeurIPS 2019)
+- [Alibi Detect](https://github.com/SeldonIO/alibi-detect) — drift detection library used as a reference implementation
